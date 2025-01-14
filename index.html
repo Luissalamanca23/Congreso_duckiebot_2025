@@ -8,7 +8,6 @@
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
         integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous" />
-    
 </head>
 
 <body>
@@ -30,23 +29,25 @@
                 </div>
             </div>
 
-            <!-- Cámara Integración con YOLO -->
-            <div class="col-md-4">
-                <div class="card">
-                    <video id="video" autoplay muted playsinline></video>
-                    <div class="card-body">
-                        <h5 class="card-title text-center">Integración con YOLO</h5>
-                    </div>
-                </div>
-            </div>
-
             <!-- Cámara de Enmascaramiento -->
             <div class="col-md-4">
                 <div class="card">
                     <canvas id="canvas_mask" style="border: 1px solid black; width: 100%; height: auto;"></canvas>
-
                     <div class="card-body">
                         <h5 class="card-title text-center">Enmascaramiento</h5>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Detección y Conteo -->
+            <div class="col-md-4">
+                <div class="card">
+                    <canvas id="imagen_yolo" style="border: 1px solid black; width: 100%; height: auto;"></canvas>
+                    <div id="object-count" style="position: absolute; top: 10px; left: 10px; background: rgba(0, 0, 0, 0.7); color: white; padding: 10px; border-radius: 5px; font-size: 16px;">
+                        Objetos detectados: 0
+                    </div>
+                    <div class="card-body">
+                        <h5 class="card-title text-center">Detección de Objetos</h5>
                     </div>
                 </div>
             </div>
@@ -57,8 +58,6 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
         crossorigin="anonymous"></script>
-    
-        <script src="./main.js"></script>
 
     <!-- OpenCV.js -->
     <script async src="https://docs.opencv.org/4.7.0/opencv.js"></script>
@@ -68,15 +67,24 @@
         integrity="sha512-x2Owc9WayRcRj80Znkau58shVfXN2OIX+gQAlrx6KPugZBKrIC6AwgEWQQCI06p2Q8RB4ilxD+y+1BdNd+1fQA=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 
+    <!-- Inference.js -->
+    <script src="https://cdn.jsdelivr.net/npm/inferencejs"></script>
+
     <script>
         const ros = new ROSLIB.Ros({
             url: "ws://zombieduck.local:9001" // Cambia la URL al WebSocket del Duckiebot
         });
 
         const originalImage = document.getElementById('imagen_original');
-        const yoloImage = document.getElementById('imagen_yolo');
         const canvasMask = document.getElementById('canvas_mask');
-        const ctx = canvasMask.getContext('2d');
+        const ctxMask = canvasMask.getContext('2d');
+        const canvasDetection = document.getElementById('imagen_yolo');
+        const ctxDetection = canvasDetection.getContext('2d');
+        const objectCountDisplay = document.getElementById('object-count');
+
+        const { InferenceEngine, CVImage } = inferencejs;
+        const inferEngine = new InferenceEngine();
+        let workerId;
 
         ros.on("connection", () => console.log("Conectado a ROS"));
         ros.on("error", error => console.error("Error en ROS:", error));
@@ -96,20 +104,62 @@
             imgElement.src = "data:image/jpeg;base64," + message.data;
         };
 
-        const processMasking = (message) => {
-            console.log("Recibiendo mensaje para enmascarar");
+        const renderDetection = (predictions) => {
+            
+
+            const objectCount = predictions.length;
+            objectCountDisplay.textContent = `Objetos detectados: ${objectCount}`;
+
+            const highlightColor = "#FFD700";
+            const textBackgroundColor = "rgba(0, 0, 0, 0.7)";
+            const textColor = "#FFFFFF";
+            const font = "16px Arial";
+
+            predictions.forEach(({ bbox, class: label, color }) => {
+                const { x, y, width, height } = bbox;
+
+                ctxDetection.strokeStyle = color || highlightColor;
+                ctxDetection.lineWidth = 3;
+                ctxDetection.strokeRect(x - width / 2, y - height / 2, width, height);
+
+                ctxDetection.font = font;
+                ctxDetection.fillStyle = textBackgroundColor;
+                ctxDetection.fillRect(x - width / 2, y - height / 2 - 20, 100, 20);
+
+                ctxDetection.fillStyle = textColor;
+                ctxDetection.fillText(label, x - width / 2 + 5, y - height / 2 - 5);
+            });
+        };
+
+        const processDetection = (message) => {
             const img = new Image();
             img.src = "data:image/jpeg;base64," + message.data;
 
             img.onload = () => {
-                console.log("Imagen cargada, dimensiones:", img.width, img.height);
+                canvasDetection.width = img.width;
+                canvasDetection.height = img.height;
+                ctxDetection.drawImage(img, 0, 0);
+
+                const cvImage = new CVImage(img);
+
+                inferEngine.infer(workerId, cvImage)
+                    .then(renderDetection)
+                    .catch(error => console.error("Error en la detección:", error));
+            };
+
+            img.onerror = () => console.error("Error al cargar la imagen para detección");
+        };
+
+        const processMasking = (message) => {
+            const img = new Image();
+            img.src = "data:image/jpeg;base64," + message.data;
+
+            img.onload = () => {
                 canvasMask.width = img.width;
                 canvasMask.height = img.height;
 
-                // Procesar la imagen
-                ctx.drawImage(img, 0, 0);
+                ctxMask.drawImage(img, 0, 0);
                 const src = cv.imread(canvasMask);
-                console.log("Matriz de origen creada: ", src.rows, src.cols);
 
                 const hsv = new cv.Mat();
                 const mask = new cv.Mat();
@@ -119,15 +169,13 @@
                     cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
                     cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
-                    const lowerHSV = new cv.Mat(1, 1, cv.CV_8UC3, [0, 50, 50, 0]);  // Rango inferior
-const upperHSV = new cv.Mat(1, 1, cv.CV_8UC3, [179, 255, 255, 0]); // Rango superior
+                    const lowerHSV = new cv.Mat(1, 1, cv.CV_8UC3, [0, 50, 50, 0]);
+                    const upperHSV = new cv.Mat(1, 1, cv.CV_8UC3, [179, 255, 255, 0]);
 
                     cv.inRange(hsv, lowerHSV, upperHSV, mask);
-                    console.log("Máscara creada");
                     cv.bitwise_and(src, src, result, mask);
 
                     cv.imshow(canvasMask, result);
-                    console.log("Enmascaramiento aplicado y mostrado en el canvas");
 
                     lowerHSV.delete();
                     upperHSV.delete();
@@ -141,17 +189,21 @@ const upperHSV = new cv.Mat(1, 1, cv.CV_8UC3, [179, 255, 255, 0]); // Rango supe
                 result.delete();
             };
 
-            img.onerror = () => {
-                console.error("Error al cargar la imagen para el enmascaramiento");
-            };
+            img.onerror = () => console.error("Error al cargar la imagen para enmascaramiento");
         };
 
+        const loadModelPromise = inferEngine.startWorker("obj_det_duckietown-m0vdj", "3", "rf_Jy6MyK2DjSSWGvJXrK45cOzXext1")
+            .then(id => {
+                workerId = id;
+                console.log("Modelo de inferencia cargado, Worker ID:", workerId);
+            })
+            .catch(error => console.error("Error al cargar el modelo de inferencia:", error));
 
-
-        // Suscribir a los tópicos
-        subscribeToTopic("/zombieduck/camera_node/image/compressed", (msg) => updateImageElement(msg, originalImage));
-        subscribeToTopic("/zombieduck/camera_node/image_detected/compressed", (msg) => updateImageElement(msg, yoloImage));
-        subscribeToTopic("/zombieduck/camera_node/image/compressed", processMasking);
+        loadModelPromise.then(() => {
+            subscribeToTopic("/zombieduck/camera_node/image/compressed", (msg) => updateImageElement(msg, originalImage));
+            subscribeToTopic("/zombieduck/camera_node/image/compressed", processMasking);
+            subscribeToTopic("/zombieduck/camera_node/image/compressed", processDetection);
+        });
     </script>
 </body>
 
