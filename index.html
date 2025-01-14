@@ -105,7 +105,6 @@
         };
 
         const renderDetection = (predictions) => {
-            
 
             const objectCount = predictions.length;
             objectCountDisplay.textContent = `Objetos detectados: ${objectCount}`;
@@ -115,8 +114,9 @@
             const textColor = "#FFFFFF";
             const font = "16px Arial";
 
-            predictions.forEach(({ bbox, class: label, color }) => {
+            predictions.forEach(({ bbox, color }) => {
                 const { x, y, width, height } = bbox;
+                const label = "Duck"; // Etiqueta fija para los objetos detectados
 
                 ctxDetection.strokeStyle = color || highlightColor;
                 ctxDetection.lineWidth = 3;
